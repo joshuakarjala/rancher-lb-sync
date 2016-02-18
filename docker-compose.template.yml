@@ -1,8 +1,9 @@
 lb-sync:
   image: founder/rancher-lb-sync:latest # or your own image
   environment:
-    LOADBALANCER_STACK_NAME: # the name of the stack which has your loadbalancer
-    LOADBALANCER_SERVICE_NAME: # the of the loadbalancer service
+    PROJECT_ID: # The Rancher Project ID
+    LOADBALANCER_ID: # The internal Rancher ID of your load balancer
+    WEBHOOK_URL: # Updates to the loadbalancer will be posted to this webhook [optional]
   labels:
     io.rancher.container.create_agent: true
     io.rancher.container.agent.role: environment

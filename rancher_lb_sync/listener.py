@@ -1,15 +1,15 @@
 import websocket
 import base64
 import os
-from processor import Processor
 import logging
+
+from processor import process_message
 
 log = logging.getLogger("listener")
 
 
-def on_message(ws, message):
-    processor = Processor(message)
-    processor.start()
+def on_message(ws, event_message):
+    process_message(event_message)
 
 
 def on_error(ws, error):

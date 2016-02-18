@@ -2,88 +2,96 @@ import logging
 import json
 import requests
 import os
-from notify import Notify
 
-log = logging.getLogger("listener")
+log = logging.getLogger('processor')
+
+CATTLE_URL = os.getenv('CATTLE_URL')
+CATTLE_ACCESS_KEY = os.getenv('CATTLE_ACCESS_KEY')
+CATTLE_SECRET_KEY = os.getenv('CATTLE_SECRET_KEY')
+PROJECT_ID = os.getenv('PROJECT_ID')
+LOADBALANCER_ID = os.getenv('LOADBALANCER_ID')
+WEBHOOK_URL = os.getenv('WEBHOOK_URL', False)
 
 
-class Processor:
-    ignored_resource_types = ['mount', 'ipAddress', 'nic', 'volume', 'port']
+def make_get_request(url):
+    return requests.get(url,
+                        auth=(CATTLE_ACCESS_KEY, CATTLE_SECRET_KEY),
+                        headers={
+                            'Accept': 'application/json',
+                            'Content-Type': 'application/json'
+                        })
 
-    def __init__(self, rancher_event):
-        self._raw = rancher_event
-        self.event = json.loads(rancher_event)
 
-        self.api_endpoint = os.getenv('CATTLE_URL')
-        self.access_key = os.getenv('CATTLE_ACCESS_KEY')
-        self.secret_key = os.getenv('CATTLE_SECRET_KEY')
-        self.loadbalancer_stack = os.getenv('LOADBALANCER_STACK_NAME')
-        self.loadbalancer_service = os.getenv('LOADBALANCER_SERVICE_NAME')
+def make_post_request(url, json):
+    return requests.post(url,
+                         auth=(CATTLE_ACCESS_KEY, CATTLE_SECRET_KEY),
+                         headers={
+                             'Accept': 'application/json',
+                             'Content-Type': 'application/json'
+                         },
+                         json=json)
 
-    def make_get_request(self, url):
-        return requests.get(url,
-                            auth=(self.access_key, self.secret_key),
-                            headers={
-                                'Accept': 'application/json',
-                                'Content-Type': 'application/json'
-                            })
 
-    def make_post_request(self, url, json):
-        return requests.post(url,
-                             auth=(self.access_key, self.secret_key),
-                             headers={
-                                 'Accept': 'application/json',
-                                 'Content-Type': 'application/json'
-                             },
-                             json=json)
-
-    def get_loadbalancer_service(self):
-        r = self.make_get_request('%s/environments?name=%s' %
-                                  (self.api_endpoint. self.loadbalancer_stack))
+def send_webhook(entries):
+        log.info(' -- Sending Webhook!')
+        r = requests.post(WEBHOOK_URL,
+                          headers={
+                              'Accept': 'application/json',
+                              'Content-Type': 'application/json'
+                          },
+                          json=entries)
         r.raise_for_status()
+        log.info(' -- Webhook sent!')
+
+
+def process_message(event_message):
+    def get_loadbalancer_service():
+        r = make_get_request('%s/projects/%s/loadbalancerservices/%s' %
+                             (CATTLE_URL, PROJECT_ID, LOADBALANCER_ID))
+        r.raise_for_status()
+
+        return r.json()
+
+    def get_loadbalancer_entries():
+        log.info(' -- Getting loadbalancer entries')
+        r = make_get_request('%s/projects/%s/serviceconsumemaps?serviceId=%s' %
+                             (CATTLE_URL, PROJECT_ID, LOADBALANCER_ID))
+
+        r.raise_for_status()
+
         try:
-            loadbalancer_stack = r.json()["data"].pop()
+            links = r.json()['data']
         except IndexError:
-            raise Exception('Load balancer stack not found!')
+            raise Exception(' -- Load balancer consume map not found!')
 
-        r = self.make_get_request("%s?name=%s" %
-                                  (loadbalancer_stack["links"]["services"],
-                                   self.loadbalancer_service))
+        loadbalancer_entries = [{'ports': link['ports']} for link in links]
+
+        log.info(' -- Current loadbalancer entries')
+        log.info(loadbalancer_entries)
+
+        return loadbalancer_entries
+
+    def add_loadbalancer_link(loadbalancer_service, loadbalancer_entry):
+        log.info(' -- Adding loadbalancer link:')
+        log.info(loadbalancer_entry)
+
+        r = make_post_request(loadbalancer_service['actions']
+                              ['addservicelink'],
+                              {'serviceLink': loadbalancer_entry})
         r.raise_for_status()
+        log.info(' -- Finished processing')
 
-        try:
-            return r.json()["data"].pop()
-        except IndexError:
-            raise Exception('Load balancer service not found!')
+    def remove_loadbalancer_link(loadbalancer_service, loadbalancer_entry):
+        log.info(' -- Removing loadbalancer link:')
+        log.info(loadbalancer_entry)
 
-    def get_stacks(self):
-        log.info(' -- Retrieving all Stacks')
-        # list of running stacks, called environments in api
-        r = self.make_get_request(self.api_endpoint + '/environments')
+        r = make_post_request(loadbalancer_service['actions']
+                              ['removeservicelink'],
+                              {'serviceLink': loadbalancer_entry})
         r.raise_for_status()
-        return r.json()["data"]
+        log.info(' -- Finished processing')
 
-    def get_registered_stack_services(self, stack):
-        log.info(' -- -- Retrieving services in stack: ' + stack['name'])
-        # get the current active services
-        r = self.make_get_request(stack['links']['services'])
-        r.raise_for_status()
-        services = r.json()["data"]
-
-        # Filter so we only have services with rancher.lb.sync.register = True
-        return filter(lambda service: service['type'] is 'service' and
-                      service['launchConfig'].get('labels', {})
-                      .get('rancher.lb.sync.register', False), services)
-
-    def get_registered_services(self, stacks):
-        registered_services = [self.get_registered_stack_services(stack)
-                               for stack in stacks]
-
-        # have to flatten the list
-        return [service for sublist in registered_services
-                for service in sublist]
-
-    def process_service(self, service):
+    def process_service(service):
         labels = service['launchConfig'].get('labels', {})
         domain = labels.get('rancher.lb.sync.domain', 'foo.com')
         ext_port = labels.get('rancher.lb.sync.ext_port', 80)
@@ -93,55 +101,48 @@ class Processor:
         return {
             'serviceId': service['id'],
             'ports': [
-                '%s.%s:%d:%d' % (service_name, domain, ext_port, service_port)
+                '%s.%s:%s=%s' %
+                (service_name, domain, ext_port, service_port)
             ]
         }
 
-    def make_loadbalancer_entries(self, services):
-        return [self.process_service(service) for service in services]
+    def is_service_valid(service):
+        return (service['state'] in ('active', 'removed') and
+                service['type'] == 'service' and service['launchConfig']
+                .get('labels', {}).get('rancher.lb.sync.register', False))
 
-    def start(self):
-        # Ignore pings
-        if self.event['name'] is 'ping':
-            return
+    event = json.loads(event_message)
 
-        # Only react to service events
-        if self.event['resourceType'] is not 'service':
-            return
+    # Ignore ping events
+    if event['name'] == 'ping':
+        return
 
-        if self.event['data']['resource']['state'] in ('active', 'removed'):
-            log.info('Detected a change in Rancher services ' +
-                     '- Begin processing.')
+    log.info('### Received Event Message: ' + event_message)
 
-            # get the current event's stack information
-            r = self.make_get_request(self.event['data']['resource']
-                                      ['links']['environment'])
-            r.raise_for_status()
-            # service_stack_response = r.json()
+    # if event['resourceType'] == 'serviceConsumeMap' and event['data']['resource']['state'] == 'removed':
+    #     log.debug('\n\n#############\n')
+    #     log.debug(event)
+    #     log.debug('\n##################\n\n')
 
-            # notify = Notify(service_stack_response,
-            #                 'started' if self.event['data']['resource']['state'] == 'active' else 'stopped')
-            # notify.send()
+    #     if WEBHOOK_URL:
+    #         send_webhook(get_loadbalancer_entries())
+    #     return
 
-            stacks = self.get_stacks()
-            registered_services = self.get_registered_services(stacks)
+    # Only react to service events
+    if event['resourceType'] != 'service':
+        return
 
-            loadbalancer_entries = \
-                self.make_loadbalancer_entries(registered_services)
+    service = event['data']['resource']
 
-            loadbalancer_service = \
-                self.get_loadbalancer_service()
+    # Only react if services are active or removed
+    if is_service_valid(service):
+        log.info(' -- Detected a change in Rancher services ' +
+                 '- Begin processing.')
 
-            self.set_loadbalancer_links(loadbalancer_service,
-                                        loadbalancer_entries)
+        loadbalancer_service = get_loadbalancer_service()
+        loadbalancer_entry = process_service(service)
 
-    def set_loadbalancer_links(self, loadbalancer_service,
-                               loadbalancer_entries):
-        log.info(' -- Setting loadbalancer entries:')
-        log.info(loadbalancer_entries)
-
-        r = self.make_post_request(loadbalancer_service['actions']
-                                   ['setservicelinks'],
-                                   {"serviceLinks": loadbalancer_entries})
-        r.raise_for_status()
-        log.info('Finished processing')
+        if service['state'] == 'active':
+            add_loadbalancer_link(loadbalancer_service, loadbalancer_entry)
+        else:
+            remove_loadbalancer_link(loadbalancer_service, loadbalancer_entry)

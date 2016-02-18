@@ -12,3 +12,8 @@ buildCache.sh
 # Information files
 LICENSE
 README.md
+
+deploy.sh
+log.sh
+docker-compose.yml
+docker-compose.template.yml

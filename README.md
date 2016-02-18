@@ -16,8 +16,9 @@ labels:
 The following environment variables should be set on the reload service:
 ```yml
 environment:
-    LOADBALANCER_STACK_NAME: bar # The name of the stack which has your loadbalancer
-    LOADBALANCER_SERVICE_NAME: lb # The of the loadbalancer service
+    PROJECT_ID: 1d3 # The Rancher Project ID
+    LOADBALANCER_ID: 1s333 # The internal Rancher ID of your load balancer
+    WEBHOOK_URL: foo.bar.com/webhook # Updates to the loadbalancer will be posted to this webhook [optional]
     ...
 ```
 
@@ -34,6 +35,21 @@ labels:
     ...
 ```
 These settings would map the service to `foo.bar.com`
+
+# Webhook
+
+If you set the `WEBHOOK_URL` environment variable then a webhook will be posted everytime the load balancer is updated. The payload looks like this:
+```json
+[{
+    "serviceId": "2s38",
+    "ports": ["service1.foo.bar.com:80=3000"]
+}, {
+    "serviceId": "1s432",
+    "ports": ["service2.bar.cpp.com:80=8080"]
+},
+...
+]
+```
 
 # Props
 
