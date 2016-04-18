@@ -94,15 +94,19 @@ def process_message(event_message):
     def process_service(service):
         labels = service['launchConfig'].get('labels', {})
         domain = labels.get('rancher.lb.sync.domain', 'foo.com')
+        service_name = labels.get('rancher.lb.sync.name', service['name'])
         ext_port = labels.get('rancher.lb.sync.ext_port', 80)
         service_port = labels.get('rancher.lb.sync.service_port', 3000)
-        service_name = labels.get('rancher.lb.sync.name', service['name'])
+        full_name = labels.get('rancher.lb.sync.full_name', False)
+
+        if not full_name:
+            full_name = '%s.%s' % (service_name, domain)
 
         return {
             'serviceId': service['id'],
             'ports': [
-                '%s.%s:%s=%s' %
-                (service_name, domain, ext_port, service_port)
+                '%s:%s=%s' %
+                (full_name, ext_port, service_port)
             ]
         }
 
@@ -119,14 +123,10 @@ def process_message(event_message):
 
     log.info('### Received Event Message: ' + event_message)
 
-    # if event['resourceType'] == 'serviceConsumeMap' and event['data']['resource']['state'] == 'removed':
-    #     log.debug('\n\n#############\n')
-    #     log.debug(event)
-    #     log.debug('\n##################\n\n')
-
-    #     if WEBHOOK_URL:
-    #         send_webhook(get_loadbalancer_entries())
-    #     return
+    # if event['resourceType'] == 'serviceConsumeMap':
+    #     if event['data']['resource']['state'] == 'removed':
+    #         if WEBHOOK_URL:
+    #             send_webhook(get_loadbalancer_entries())
 
     # Only react to service events
     if event['resourceType'] != 'service':
