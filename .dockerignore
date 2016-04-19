@@ -8,6 +8,8 @@
 #build files
 build.sh
 buildCache.sh
+deploy.sh
+update-*.sh
 
 # Information files
 LICENSE

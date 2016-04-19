@@ -1,5 +1,7 @@
 /container_settings.json
 /.idea
 docker-compose.yml
+docker-compose.production.yml
 deploy.sh
 log.sh
+update*.sh
