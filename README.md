@@ -32,7 +32,7 @@ labels:
     rancher.lb.sync.ext_port: 80 # The external port on the loadbalancer we map to)
     rancher.lb.sync.service_port: 3000 # The port of our service our we mapping)
     rancher.lb.sync.name: foo # The name we want to register our service with (defaults to the service name)
-    rancher.lb.sync.full_name: (*.)bar.com # Overwrites the combo of domain + name
+    rancher.lb.sync.full_name: (*.)bar.com # Overwrites the combo of domain + name // can b `,` separated list
     ...
 ```
 These settings would map the service to `foo.bar.com`

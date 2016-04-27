@@ -23,6 +23,8 @@ def make_get_request(url):
 
 
 def make_post_request(url, json):
+    log.info('json')
+    log.info(json)
     return requests.post(url,
                          auth=(CATTLE_ACCESS_KEY, CATTLE_SECRET_KEY),
                          headers={
@@ -45,6 +47,11 @@ def send_webhook(entries):
 
 
 def process_message(event_message):
+    def is_service_valid(service):
+        return (service['state'] in ('active', 'removed') and
+                service['type'] == 'service' and service['launchConfig']
+                .get('labels', {}).get('rancher.lb.sync.register', False))
+
     def get_loadbalancer_service():
         r = make_get_request('%s/projects/%s/loadbalancerservices/%s' %
                              (CATTLE_URL, PROJECT_ID, LOADBALANCER_ID))
@@ -71,6 +78,22 @@ def process_message(event_message):
 
         return loadbalancer_entries
 
+    def get_services():
+        log.info(' -- Getting services')
+        r = make_get_request('%s/projects/%s/services' %
+                             (CATTLE_URL, PROJECT_ID))
+
+        r.raise_for_status()
+
+        try:
+            services = r.json()['data']
+        except IndexError:
+            raise Exception(' -- No services found')
+
+        services = filter(lambda s: is_service_valid(s), services)
+
+        return services
+
     def add_loadbalancer_link(loadbalancer_service, loadbalancer_entry):
         log.info(' -- Adding loadbalancer link:')
         log.info(loadbalancer_entry)
@@ -78,6 +101,16 @@ def process_message(event_message):
         r = make_post_request(loadbalancer_service['actions']
                               ['addservicelink'],
                               {'serviceLink': loadbalancer_entry})
+        r.raise_for_status()
+        log.info(' -- Finished processing')
+
+    def set_loadbalancer_links(loadbalancer_service, loadbalancer_entries):
+        log.info(' -- Setting loadbalancer links:')
+        log.info(loadbalancer_entries)
+
+        r = make_post_request(loadbalancer_service['actions']
+                              ['setservicelinks'],
+                              {'serviceLinks': loadbalancer_entries})
         r.raise_for_status()
         log.info(' -- Finished processing')
 
@@ -102,18 +135,12 @@ def process_message(event_message):
         if not full_name:
             full_name = '%s.%s' % (service_name, domain)
 
+        ports = ['%s:%s=%s' % (name, ext_port, service_port) for name in full_name.split(',')]
+
         return {
             'serviceId': service['id'],
-            'ports': [
-                '%s:%s=%s' %
-                (full_name, ext_port, service_port)
-            ]
+            'ports': ports
         }
-
-    def is_service_valid(service):
-        return (service['state'] in ('active', 'removed') and
-                service['type'] == 'service' and service['launchConfig']
-                .get('labels', {}).get('rancher.lb.sync.register', False))
 
     event = json.loads(event_message)
 
@@ -132,17 +159,14 @@ def process_message(event_message):
     if event['resourceType'] != 'service':
         return
 
-    service = event['data']['resource']
+    log.info('### Received Event state: ' + event['data']['resource']['state'])
 
-    # Only react if services are active or removed
-    if is_service_valid(service):
-        log.info(' -- Detected a change in Rancher services ' +
-                 '- Begin processing.')
+    if not event['data']['resource']['state'] in ['active', 'removed']:
+        return
 
-        loadbalancer_service = get_loadbalancer_service()
-        loadbalancer_entry = process_service(service)
+    loadbalancer_service = get_loadbalancer_service()
+    services = get_services()
 
-        if service['state'] == 'active':
-            add_loadbalancer_link(loadbalancer_service, loadbalancer_entry)
-        else:
-            remove_loadbalancer_link(loadbalancer_service, loadbalancer_entry)
+    loadbalancer_entries = [process_service(s) for s in services]
+
+    set_loadbalancer_links(loadbalancer_service, loadbalancer_entries)

@@ -7,3 +7,4 @@ lb-sync:
   labels:
     io.rancher.container.create_agent: true
     io.rancher.container.agent.role: environment
+  mem_limit: 150000000
