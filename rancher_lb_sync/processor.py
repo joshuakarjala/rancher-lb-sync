@@ -23,8 +23,6 @@ def make_get_request(url):
 
 
 def make_post_request(url, json):
-    log.info('json')
-    log.info(json)
     return requests.post(url,
                          auth=(CATTLE_ACCESS_KEY, CATTLE_SECRET_KEY),
                          headers={
@@ -159,7 +157,7 @@ def process_message(event_message):
     if event['resourceType'] != 'service':
         return
 
-    log.info('### Received Event state: ' + event['data']['resource']['state'])
+    log.info('### Received Event State: ' + event['data']['resource']['state'])
 
     if not event['data']['resource']['state'] in ['active', 'removed']:
         return
